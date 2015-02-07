@@ -3,11 +3,15 @@ require 'mail'
 
 module RubyMail
   class Client
-    def initialize(email, password, pop3, pop3_port, ssl, smtp, smtp_port)
+    def initialize(email, password = nil, pop3 = nil, pop3_port = nil, ssl = nil, smtp = nil, smtp_port = nil)
       init_db
+      if (password == nil)
+        user_info = @database.execute("SELECT password, pop3, pop3_port, smtp, smtp_port, ssl FROM users WHERE email = @email", email).flatten
+        password, pop3, pop3_port, smtp, smtp_port, ssl = user_info
+      else
+        @database.execute("INSERT INTO users VALUES(NULL, @email, @password, @pop3, @pop3_port, @smtp, @smtp_port, @ssl)", email, password, pop3, pop3_port, smtp, smtp_port, ssl)
+      end
       init_mail(email, password, pop3, pop3_port, ssl, smtp, smtp_port)
-      sync_mail email
-      #puts "#{unread.count} unread emails"
     end
 
     def init_db
@@ -18,13 +22,14 @@ module RubyMail
     end
 
     def init_mail(email, password, pop3, pop3_port, ssl, smtp, smtp_port)
+      @email, @password, @pop3, @pop3_port, @ssl, @smtp, @smtp_port = email, password, pop3, pop3_port, ssl, smtp, smtp_port
       Mail.defaults do
         if(email.end_with? "@gmail.com") then username.insert(0, "recent:") end
         retriever_method :pop3, :address    => pop3,
                                 :port       => pop3_port,
                                 :user_name  => email,
                                 :password   => password,
-                                :enable_ssl => ssl
+                                :enable_ssl => (ssl == 1 ? true : false)
 
         delivery_method :smtp, :address                => smtp,
                                :port                   => smtp_port,
@@ -38,8 +43,8 @@ module RubyMail
       end
     end
 
-    def sync_mail(email)
-      last_synced = @database.execute("SELECT message_id FROM emails WHERE id = (SELECT MAX(id) FROM emails WHERE [to] = @username)", email).flatten[0]
+    def sync_mail
+      last_synced = @database.execute("SELECT message_id FROM emails WHERE id = (SELECT MAX(id) FROM emails WHERE [to] = @username)", @email).flatten[0]
       new_mail = []
       if(last_synced == nil)
         new_mail = Mail.all
@@ -70,12 +75,13 @@ module RubyMail
           )
         end
       end
+      puts "#{unread.count} unread emails"
     end
-    
+
     def unread
       @database.execute("SELECT * FROM emails WHERE read = 0")
     end
   end
 end
 
-test = RubyMail::Client.new("", "", "pop3.abv.bg", 995, true, "smtp.abv.bg", 465)
+#test = RubyMail::Client.new("", "", "pop3.abv.bg", 995, true, "smtp.abv.bg", 465)
