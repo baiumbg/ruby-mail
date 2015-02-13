@@ -1,5 +1,5 @@
-require './client.rb'
-require './utils.rb'
+require './client'
+require './utils'
 require 'io/console'
 
 module RubyMail
@@ -19,11 +19,13 @@ module RubyMail
         process_cmd cmd, true
       end
 
-      start_shell if cmd == "login"
+      if cmd == "login"
+        home
+        start_shell
+      end
     end
 
     def start_shell
-      Utilities.clear_screen
       cmd = ""
       until cmd == "quit" || cmd == "logout"
         print "#{@client.settings[:email]}$ "
@@ -38,14 +40,21 @@ module RubyMail
       when "login"
         if preshell then login
         else puts "You are already logged in. Type \"logout\" if you want to switch users." end
+      when "delete"
+        if args.length > 3 then puts "Too many arguments."
+        elsif args.length < 3 then puts "Missing arguments."
+        elsif args[1] == "mail" then delete_mail(args[2].to_i)
+        elsif args[1] == "user" && !preshell && args[2] == @client.settings[:email] then puts "You need to log out to delete this account."
+        elsif args[1] == "user" then delete_user(args[2])
+        else help("delete")
+        end
       when "home"
         if preshell then "You need to be logged in to visit the home screen."
         elsif args.length > 1 then puts "home doesn't take any arguments."
         else home end
       when "inbox"
         if preshell then puts "You need to be logged in to view your inbox."
-        elsif args.length > 2
-          puts "Too many arguments."
+        elsif args.length > 2 then puts "Too many arguments."
         else
           Utilities.clear_screen
           if args[1] then show_inbox(args[1].to_i)
@@ -53,14 +62,17 @@ module RubyMail
         end
       when "read"
         if preshell then puts "You need to be logged in to read mail."
-        elsif args.length > 2 
-          puts "Too many arguments."
-        elsif args.length < 2
-          puts "Missing arguments."
+        elsif args.length > 2  then puts "Too many arguments."
+        elsif args.length < 2 then puts "Missing arguments."
         else
           Utilities.clear_screen
           read_mail(args[1].to_i)
         end
+      when "extract"
+        if preshell then puts "You need to be logged in to extract attachments."
+        elsif args.length > 2 then puts "Too many arguments."
+        elsif args.length < 2 then puts "Missing arguments."
+        else extract(args[1].to_i) end
       when "mark"
         if preshell then puts "You need to be logged in to mark any messages."
         elsif args.length > 3 then puts "Too many arguments."
@@ -80,7 +92,7 @@ module RubyMail
         elsif args.length == 1 then config(true)
         elsif args.length < 3 then puts "You need to specify a valid number to set that setting to."
         elsif args.length > 3 then puts "Too many arguments."
-        else config(false, args[1], args[2].to_i) end
+        else config(false, args[1], args[2]) end
       when "logout"
         if preshell then puts "You need to be logged in to log out."
         else logout end
@@ -123,6 +135,22 @@ module RubyMail
       home
     end
 
+    def delete_mail(id)
+      mail = Utilities.get_mail_by_id(id)
+      if mail == [] then "Mail does not exist."
+      else
+        Utilities.del_mail(id)
+        puts "Mail \"#{mail[6]}\" from #{mail[4]} deleted successfully."
+      end
+    end
+
+    def delete_user(user_name)
+      if Utilities.user_exists? user_name
+        Utilities.del_user(user_name)
+        puts "User #{user_name} deleted successfully."
+      else puts "User #{user_name} does not exist." end
+    end
+
     def start_sync
       @syncer = Thread.new do
         loop do
@@ -140,8 +168,10 @@ module RubyMail
     def show_inbox(page = 1)
       total_pages = (@client.inbox_total / @client.settings[:mails_per_page].to_f).ceil
       @client.get_inbox(page).each do |mail|
-        print "~" if mail[4] == 0
-        puts "#{mail[0]} | #{mail[1]} | #{mail[2]} | #{mail[3]}"
+        print "~" if mail[:read] == 0
+        print "#{mail[:id]} | #{mail[:from]} | #{mail[:subject]} | #{mail[:received]}"
+        print " [*]" if Utilities.get_attachment_names(mail[:message_id]).count > 0
+        print "\n"
       end
       puts "\nPage: #{page}/#{total_pages}\n"
       puts "Type \"inbox \#\" to show that page of your inbox."
@@ -158,6 +188,18 @@ module RubyMail
         print "\n\n"
         if mail[:text] == nil then puts mail[:html]
         else puts mail[:text] end
+        puts "\nAttachments: #{Utilities.get_attachment_names(mail[:message_id]).join(", ")}" if Utilities.mail_has_attachments(mail[:message_id])
+        @client.mark_as([mail[:message_id]], true)
+      end
+    end
+
+    def extract(id)
+      attachment_names = Utilities.get_attachment_names(id)
+      if Utilities.get_mail_by_id(id) == [] then puts "Mail with id #{id} does not exist."
+      elsif attachment_names.count < 0 then puts "Mail does not have any attachments."
+      else
+        @client.extract_attachments(id)
+        puts "Attachments extracted to attachments/"
       end
     end
 
@@ -189,7 +231,7 @@ module RubyMail
 
     def config(print_current_config, setting=nil, new_value=nil)
       if print_current_config
-        puts "Current settings:\n\n"
+        puts "\nCurrent settings:\n\n"
         puts "password: #{"*" * @client.settings[:password].length}"
         puts "pop3_server: #{@client.settings[:pop3_server]}"
         puts "pop3_port: #{@client.settings[:pop3_port]}"
@@ -201,12 +243,47 @@ module RubyMail
         puts "mails_per_page: #{@client.settings[:mails_per_page]}\n\n"
       else
         case setting
+        when "password" 
+          @client.configure(:password, new_value)
+          puts "Successfully changed password."
+        when "pop3_server"
+          @client.configure(:pop3_server, new_value)
+          puts "Changed pop3_server to #{new_value}."
+        when "pop3_port"
+          @client.configure(:pop3_port, new_value.to_i)
+          puts "Changed pop3_port to #{new_value}."
+        when "pop3_ssl"
+          if(new_value.to_i == 1 || new_value.to_i == 0) 
+            @client.configure(:pop3_server, new_value.to_i)
+            puts "Changed pop3_server to #{new_value}."
+          else
+            puts "That setting should be either 0 or 1."
+          end
+        when "smtp_server"
+          @client.configure(:smtp_server, new_value)
+          puts "Changed smtp_server to #{new_value}."
+        when "smtp_port"
+          @client.configure(:smtp_port, new_value)
+          puts "Changed smtp_port to #{new_value}."
+        when "smtp_ssl"
+          if(new_value.to_i == 1 || new_value.to_i == 0) 
+            @client.configure(:smtp_ssl, new_value.to_i)
+            puts "Changed smtp_ssl to #{new_value}."
+          else
+            puts "That setting should be either 0 or 1."
+          end
         when "sync_delay"
           if new_value < 60 then puts "Minimum value for that setting is 60."
-          else @client.configure(:sync_delay, new_value) end
+          else 
+            @client.configure(:sync_delay, new_value)
+            puts "Changed sync_delay to #{new_value}."
+          end
         when "mails_per_page"
           if new_value < 2 then puts "Minimum value for that setting is 2."
-          else @client.configure(:inbox_mails_per_page, new_value) end
+          else 
+            @client.configure(:mails_per_page, new_value)
+            puts "Changed mails_per_page to #{new_value}."
+          end
         end
       end
     end
