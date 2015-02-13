@@ -1,5 +1,6 @@
 require 'sqlite3'
 require 'mail'
+require_relative './utils'
 
 module RubyMail
   class Client
@@ -8,15 +9,18 @@ module RubyMail
 
     def initialize(user_name, password = nil, pop3_server = nil, pop3_port = nil, pop3_ssl = nil, smtp_server = nil, smtp_port = nil, smtp_ssl=nil)
       init_db
-      if password == nil
+      if Utilities.user_exists? user_name
         user_info = @database.execute("SELECT password, pop3_server, pop3_port, smtp_server, smtp_port, pop3_ssl, smtp_ssl FROM users WHERE email = ?", user_name).flatten
         password, pop3_server, pop3_port, smtp_server, smtp_port, pop3_ssl, smtp_ssl = user_info
+      elsif(password == nil || pop3_server == nil || pop3_port == nil || pop3_ssl == nil || smtp_server == nil || smtp_port == nil || smtp_ssl == nil)
+        throw "Wrong number of arguments or user does not exist"
       else
         @database.execute("INSERT INTO users VALUES(NULL, ?, ?, ?, ?, ?, ?, ?, ?)", user_name, password, pop3_server, pop3_port, smtp_server, smtp_port, pop3_ssl, smtp_ssl)
-        @database.execute("INSERT INTO user_config VALUES(NULL, ?, 120, 10)")
+        @database.execute("INSERT INTO user_config VALUES(NULL, ?, 120, 10)", user_name)
       end
       init_mail(user_name, password, pop3_server, pop3_port, pop3_ssl, smtp_server, smtp_port, smtp_ssl)
       init_settings
+      Dir.mkdir("attachments") unless Dir.exist?("attachments")
     end
 
     def init_db
@@ -61,10 +65,27 @@ module RubyMail
 
     def get_mail(id)
       mail = Utilities.get_mail_by_id(id)
-      if mail == nil then nil
+      if mail == [] then nil
       else
-        mark_as([mail[1]], true)
-        { from: mail[4], to: mail[5], subject: mail[6], received: mail[7], text: mail[2], html: mail[3] }
+        {
+          id: mail[0],
+          from: mail[4],
+          to: mail[5],
+          subject: mail[6],
+          received: mail[7],
+          text: mail[2],
+          html: mail[3],
+          message_id: mail[1],
+          attachments: Utilities.get_attachment_names(mail[1]),
+          read: mail[8]
+        }
+      end
+    end
+
+    def extract_attachments(mail_id)
+      mail = get_mail(mail_id)
+      @database.execute("SELECT * FROM attachments WHERE message_id = ?", mail[:message_id]).each do |attachment|
+        File.write("attachments/#{attachment[2]}", attachment[3])
       end
     end
 
@@ -78,8 +99,6 @@ module RubyMail
         text, html = nil, mail.body.decoded
         text = mail.text_part.decoded unless mail.text_part == nil
         html = mail.html_part.decoded unless mail.html_part == nil
-        # if(mail.text_part != nil) then text = mail.text_part.decoded end
-        # if(mail.html_part != nil) then html = mail.html_part.decoded end
         @database.execute(
           "INSERT INTO emails VALUES(NULL, ?, ?, ?, ?, ?, ?, ?, 0)",
           mail.message_id,
@@ -128,20 +147,30 @@ module RubyMail
     end
 
     def get_inbox(page)
+      mails = []
       @database.execute(
-        "SELECT id, [from], subject, received, read FROM emails WHERE [to] = ? ORDER BY id DESC LIMIT ?, ?",
+        "SELECT id FROM emails WHERE [to] = ? ORDER BY id DESC LIMIT ?, ?",
         @settings[:email],
         @settings[:mails_per_page] * (page - 1),
         @settings[:mails_per_page]
-      )
+      ).flatten.each do |mail_id|
+        mails << get_mail(mail_id)
+      end
+      mails
     end
 
     def configure(setting, value)
       @settings[setting] = value
       case setting
+      when :password then @database.execute("UPDATE users SET password = ? WHERE email = ?", value, @settings[:email])
+      when :pop3_server then @database.execute("UPDATE users SET pop3_server = ? WHERE email = ?", value, @settings[:email])
+      when :pop3_port then @database.execute("UPDATE users SET pop3_port = ? WHERE email = ?", value, @settings[:email])
+      when :pop3_ssl then @database.execute("UPDATE users SET pop3_ssl = ? WHERE email = ?", value, @settings[:email])
+      when :smtp_server then @database.execute("UPDATE users SET smtp_server = ? WHERE email = ?", value, @settings[:email])
+      when :smtp_port then @database.execute("UPDATE users SET smtp_port = ? WHERE email = ?", value, @settings[:email])
+      when :smtp_ssl then @database.execute("UPDATE users SET smtp_ssl = ? WHERE email = ?", value, @settings[:email])
       when :mails_per_page then @database.execute("UPDATE user_config SET mails_per_page = ? WHERE email = ?", value, @settings[:email])
       when :sync_delay then @database.execute("UPDATE user_config SET sync_delay = ? WHERE email = ?", value, @settings[:email])
-      when :password then @database.execute("UPDATE users SET password = ? WHERE email = ?", value, @settings[:email])
       end
     end
 
@@ -155,7 +184,11 @@ module RubyMail
     end
 
     def unread
-      @database.execute("SELECT * FROM emails WHERE read = 0 AND [to]=?", @settings[:email])
+      unread_mails = []
+      @database.execute("SELECT id FROM emails WHERE read = 0 AND [to] = ?", @settings[:email]).flatten.each do |id|
+        unread_mails << get_mail(id)
+      end
+      unread_mails
     end
   end
 end
