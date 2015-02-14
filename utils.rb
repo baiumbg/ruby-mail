@@ -26,10 +26,6 @@ module RubyMail
       @@database.execute("SELECT COUNT(id) FROM attachments WHERE message_id = ?", message_id).flatten[0].to_i > 0
     end
 
-    def self.clear_screen
-      system "cls" or system "clear"
-    end
-
     def self.del_user(user_name)
       @@database.execute("DELETE FROM users WHERE email = ?", user_name)
       @@database.execute("DELETE FROM attachments WHERE message_id IN (SELECT message_id FROM emails WHERE [to] = ?)", user_name)
@@ -39,6 +35,10 @@ module RubyMail
     
     def self.del_mail(mail_id)
       @@database.execute("DELETE FROM emails WHERE id = ?", mail_id)
+    end
+
+    def self.clear_screen
+      system "cls" or system "clear"
     end
   end
 end
