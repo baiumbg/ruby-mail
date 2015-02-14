@@ -66,7 +66,7 @@ module RubyMail
     def get_mail(id)
       mail = Utilities.get_mail_by_id(id)
       if mail == [] then nil
-      else
+      else 
         {
           id: mail[0],
           from: mail[4],
